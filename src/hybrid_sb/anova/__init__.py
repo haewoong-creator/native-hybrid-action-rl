@@ -1,0 +1,1 @@
+"""Sparse interaction-design components."""

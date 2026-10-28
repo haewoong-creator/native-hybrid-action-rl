@@ -1,0 +1,567 @@
+\documentclass[10pt,journal]{IEEEtran}
+\usepackage{cite}
+\usepackage{kotex}
+\usepackage{amsmath,amssymb,booktabs,graphicx,multirow,url,array}
+\usepackage[section]{placeins}
+\usepackage[hidelinks]{hyperref}
+\interdisplaylinepenalty=2500
+\setcounter{secnumdepth}{2}
+\renewcommand{\thesection}{S\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\thetable}{S\arabic{table}}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\renewcommand{\theequation}{S\arabic{equation}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Qhard}{Q^{\mathrm{hard}}}
+\newcommand{\Qmulti}{\widetilde Q}
+\newcommand{\sg}{\operatorname{sg}}
+
+\begin{document}
+\title{Supplementary Material for\\
+``Native Hybrid-Action Actor--Critic Learning\\
+under Combinatorial Action Growth''}
+\author{Anonymous Authors}
+\markboth{IEEE Transactions on Neural Networks and Learning Systems}%
+{Anonymous Authors: Supplementary Material for Native Hybrid-Action Actor--Critic Learning}
+\maketitle
+
+\section{Scope and Reproducibility Statement}
+\label{sec:scope}
+
+본 보충자료는 조합공간 증가에 대한 본문의 성능--비용 분석을 재현하는 데 필요한 세부사항을 제공한다. 구체적으로 native hybrid policy와 hard-action critic, 다중선형 정책 갱신, 조건수 제약 질의 설계, 자동미분 경로, 학습 설정 및 전체 HardMove 결과를 제시한다. 본문의 핵심 주장은 평가범위에서 조합 수 증가에 따른 성능 붕괴를 줄이면서 전체 열거를 피한다는 것이며, ACV 유도와 estimator 검증은 이 제한된 질의 업데이트의 구현 및 수치적 일관성을 뒷받침한다.
+
+상태를 $s\in\mathcal S$, 정규화된 연속 행동을 $a^c\in[-1,1]^m$, 이진 행동을 $z\in\{-1,+1\}^b$로 나타낸다. 별도 언급이 없으면 기대값과 기울기는 고정된 상태와 연속 행동에서 정의된다.
+
+\section{Policy and Hard-Action Critic}
+\label{sec:policy-critic}
+
+\subsection{Hybrid policy}
+
+액터는 $(c_{\mathrm{ctrl}},b_{\mathrm{ctrl}})=f_\theta(s)$를 출력하며, 정규화된 연속 행동은
+\begin{equation}
+a^c=\tanh(c_{\mathrm{ctrl}})
+\end{equation}
+이다. 물리적 행동범위가 $[a^c_{\min},a^c_{\max}]$이면 환경 wrapper에서 성분별 affine 변환을 적용한다.
+
+구현에서 spin network라 부르는 보조 logit-adjustment module은 $(J_\psi(s),h_\psi(s))=g_\psi(s)$를 출력한다. $J_\psi(s)$는 대칭이고 대각성분은 0이다. 구현된 평균장 사상은
+\begin{align}
+\ell(s)&=h_\psi(s)+J_\psi(s)\tanh(h_\psi(s))+b_{\mathrm{ctrl}},\\
+S(s)&=\tanh(\ell(s))
+\end{align}
+이다. Warm-up 이후 학습 행동은
+\begin{equation}
+Z_i\sim\operatorname{Bernoulli}_{\{-1,+1\}}
+\left(\Pr(Z_i=+1)=\frac{1+S_i}{2}\right)
+\end{equation}
+에서 독립적으로 표본화한다. 평가 시에는
+$Z_i^{\mathrm{eval}}=+1$ if $S_i\geq0$ and $-1$ otherwise를 사용한다. Warm-up 중에는 두 행동공간에서 무작위 행동을 생성한다.
+
+$J_\psi(s)$는 다른 binary field를 통해 각 $S_i$를 조정하는 state-conditioned logit-interaction module이다. 그러나 $S$가 주어지면 위 학습분포는 product Bernoulli이므로, $J_\psi$가 표본분포에 직접적인 확률상관을 도입하는 것은 아니다. 이에 따라 본문 ablation에서는 이 모듈을 제거한 변형을 marginal-logit policy로 표시한다.
+
+\subsection{Structured twin critics}
+
+각 hard-action critic은
+\begin{align}
+Q_{\phi_j}^{\mathrm{hard}}(s,a^c,z)
+&=q_{0,j}(s,a^c)+\frac{1}{\sqrt b}\sum_{i=1}^{b}q_{i,j}(s,a^c)z_i
+\nonumber\\
+&\quad+\frac{1}{\sqrt{|\mathcal E_{\mathrm{all}}|}}
+\sum_{(i,k)\in\mathcal E_{\mathrm{all}}}q_{ik,j}(s,a^c)z_i z_k,
+\label{eq:supp-critic}
+\end{align}
+로 계산한다. 여기서 $j\in\{1,2\}$이고
+$\mathcal E_{\mathrm{all}}=\{(i,k):1\leq i<k\leq b\}$이다. Actor update에서는
+\begin{equation}
+Q_{\min}^{\mathrm{hard}}(s,a^c,z)
+=\min_{j\in\{1,2\}}Q_{\phi_j}^{\mathrm{hard}}(s,a^c,z)
+\label{eq:supp-qmin}
+\end{equation}
+을 사용한다. 각 critic은 이차식이지만 두 critic의 점별 최솟값은 일반적으로 원래 critic과 동일한 이차 형식을 유지하지 않는다.
+
+Replay transition을 $(s,a^c,z,r,s',d)$라 하면 target은
+\begin{equation}
+y=r+\gamma(1-d)Q_{\min}^{\mathrm{hard}}(s',a^{c\prime},z^{\prime})
+\end{equation}
+이다. $(a^{c\prime},z^{\prime})$는 현재 정책의 결정론적 다음 행동이다. 두 critic은 평균제곱 TD 오차로 학습하고 target critic은 Polyak averaging으로 갱신한다.
+
+\subsection{Analytic single-critic expectation and the clipped objective}
+
+각 구조화 크리틱의 Bernoulli 기대값은
+\begin{align}
+\widetilde Q_j(S)
+&=q_{0,j}+\frac{1}{\sqrt b}\sum_iq_{i,j}S_i
+\nonumber\\
+&\quad+\frac{1}{\sqrt{|\mathcal E_{\mathrm{all}}|}}
+\sum_{(i,k)\in\mathcal E_{\mathrm{all}}}q_{ik,j}S_iS_k
+\label{eq:supp-single-analytic}
+\end{align}
+로 정확히 계산할 수 있다. 그러나 실제 actor objective는
+$F_{\min}(z)=\min_jQ_{\phi_j}^{\mathrm{hard}}(s,a^c,z)$를 사용하며
+\begin{equation}
+\E_{\mu_S}[F_{\min}(Z)]
+\neq\min_j\widetilde Q_j(S)
+\label{eq:supp-min-gap}
+\end{equation}
+가 일반적이다. 즉 두 개별 기대값의 최솟값은 저비용이지만 왼쪽과 다른 정책목적을 정의한다. 따라서 본 연구는 $F_{\min}$ 자체를 질의하고 그 clipped objective의 기대값과 기울기를 ANOVA--ACV로 추정한다. 이 구분은 각 단일 critic의 해석적 기대값을 사용하는 저비용 계산이 실제 actor objective를 대체하지 않도록 한다.
+
+\section{Multilinear Extension}
+\label{sec:multilinear}
+
+$S\in[-1,1]^b$에 대해
+\begin{equation}
+\mu_S(z)=\prod_{i=1}^{b}\frac{1+z_iS_i}{2}
+\label{eq:supp-mu}
+\end{equation}
+를 정의한다. 고정된 $(s,a^c)$에서 $F(z)=F_{\min}(z)$로 두면 그 다중선형 확장은
+\begin{align}
+\widetilde F(S)
+&=\E_{Z\sim\mu_S}[F(Z)]\\
+&=\sum_{z\in\{-1,+1\}^b}F(z)
+\prod_{i=1}^{b}\frac{1+z_iS_i}{2}.
+\label{eq:supp-extension}
+\end{align}
+
+\subsection{Vertex consistency and uniqueness}
+
+임의의 $v\in\{-1,+1\}^b$에 대해
+\begin{equation}
+\prod_{i=1}^{b}\frac{1+z_iv_i}{2}=\mathbf1\{z=v\}
+\end{equation}
+이므로 $\widetilde F(v)=F(v)$이다. 또한 식~\eqref{eq:supp-extension}의 각 인자는 $S_i$에 대해 일차이므로 $\widetilde F$는 다중선형이다. 모든 다중선형 함수는
+\begin{equation}
+H(S)=\sum_{U\subseteq\{1,\ldots,b\}}c_U\prod_{i\in U}S_i
+\end{equation}
+로 표현된다. 그 계수는 역 Walsh--Hadamard 변환
+\begin{equation}
+c_U=2^{-b}\sum_{v\in\{-1,+1\}^b}H(v)\prod_{i\in U}v_i
+\label{eq:supp-walsh-inverse}
+\end{equation}
+로 복원된다. 따라서 동일한 $2^b$개 꼭짓점 값을 갖는 두 다중선형 함수는 모든 계수가 같고, 확장은 유일하다. 이 성질은 보간의 일관성을 보장하지만 critic 정확도나 policy convergence를 보장하지는 않는다.
+
+\subsection{Conditional value difference}
+
+$i$번째 성분을 분리하면
+\begin{align}
+\widetilde F(S)
+&=\frac{1+S_i}{2}\E_{Z_{-i}}[F(+1,Z_{-i})]
+\nonumber\\
+&\quad+\frac{1-S_i}{2}\E_{Z_{-i}}[F(-1,Z_{-i})].
+\end{align}
+따라서
+\begin{align}
+\frac{\partial\widetilde F}{\partial S_i}
+=\frac12\E_{Z_{-i}}\!\left[F(+1,Z_{-i})-F(-1,Z_{-i})\right].
+\label{eq:supp-conditional}
+\end{align}
+두 조건부 기대값은 $S_i$에 의존하지 않으므로 미분 시 혼합계수의 도함수 $+1/2$와 $-1/2$만 남는다. 이는 임의의 baseline을 뺀 표본 advantage가 아니라 두 conditional action values의 차이이다. 예를 들어
+\begin{equation}
+F(z)=c_0+\sum_jc_jz_j+\sum_{j<k}c_{jk}z_jz_k
+\end{equation}
+이면
+\begin{equation}
+\frac{\partial\widetilde F}{\partial S_i}
+=c_i+\sum_{j\ne i}c_{ij}S_j,
+\end{equation}
+이므로 다른 이진 결정의 현재 평균이 $i$번째 결정의 갱신방향에 직접 반영된다.
+
+\section{Condition-Aware Binary Query Design}
+\label{sec:design}
+
+\subsection{Sparse basis and active interactions}
+
+Interaction set을 $\mathcal E$라 하고 $K=|\mathcal E|$라 하자. Sparse basis는
+\begin{equation}
+x_{\mathcal E}(z)=
+\left[1,z_1,\ldots,z_b,\{z_iz_j:(i,j)\in\mathcal E\}\right]
+\end{equation}
+이며 항의 수는 $p=1+b+K$이다. 구현에서는 amortized network가 모든 후보쌍의 계수를 예측하고, minibatch 평균 절댓값이 큰
+\begin{equation}
+K=\min\left(b,\frac{b(b-1)}{2}\right)
+\end{equation}
+개를 선택한다. Top-$K$ 선택은 actor gradient 경로에서 분리한다.
+
+\subsection{Design construction}
+
+본 구현은 고전적인 strength-2 orthogonal array를 직접 사용하지 않는다. 고정 seed의 Rademacher 행으로 설계행렬을 만들고
+\begin{equation}
+\operatorname{rank}(X_{\mathcal E})=p,
+\qquad \kappa(X_{\mathcal E})\leq100
+\label{eq:supp-design-condition}
+\end{equation}
+을 검사한다. 초기 행 수는 $2p$이며 조건을 만족하지 않으면 $3p$, $4p$ 순서로 증가시킨다. 모든 시도가 실패하면 묵시적으로 설계를 변경하지 않고 오류로 처리한다. 기록되는 진단량은 rank, condition number, 최소 singular value, 최대 off-diagonal Gram correlation 및 duplicate rate이다.
+
+구체적인 생성 절차는 다음과 같다. (1) 현재 minibatch에서 모든 후보쌍의 예측계수 절댓값을 평균한다. (2) 상위 $K$개 쌍을 선택하고 선택결과를 계산 그래프에서 분리한다. (3) 각 후보 행 수 $n\in\{2p,3p,4p\}$에 대해 $Z\in\{-1,+1\}^{n\times b}$를 생성한다. (4) 각 행을 $x_{\mathcal E}(z)$로 변환하여 $X_{\mathcal E}$를 구성한다. (5) full column rank와 식~\eqref{eq:supp-design-condition}을 동시에 만족하는 첫 설계를 채택한다. 같은 seed와 active set은 같은 설계를 생성하므로 실패와 재현 여부를 확인할 수 있다.
+
+Rank는 선택된 계수들을 질의값으로부터 구별할 수 있는지를 검사하고, condition number는 작은 target 오차가 계수공간에서 과도하게 증폭되는 것을 방지하기 위한 수치적 진단이다. 이 검사는 Rademacher 표본 자체에 정책성능 우위를 부여하지 않는다. 실제 HM10 ablation에서도 Monte Carlo 대체와 최종 성공률 차이는 작았으며, 본 설계의 관찰된 이점은 주로 실행시간 측면이었다.
+
+\subsection{Amortized ANOVA update}
+
+ANOVA network는 $(s,a^c)$에서
+\begin{equation}
+g_\eta(z;s,a^c)=\beta_0+
+\sum_{i=1}^{b}\beta_i z_i+
+\sum_{(i,j)\in\mathcal E}\beta_{ij}z_i z_j
+\label{eq:supp-anova}
+\end{equation}
+의 계수를 출력한다. 설계행동 $z^{(n)}$의 target은
+$Q_{\min}^{\mathrm{hard}}(s,a^c,z^{(n)})$이며
+\begin{align}
+\mathcal L_{\mathrm{ANOVA}}(\eta)
+&=\frac1{N_{\mathrm{des}}}\sum_{n=1}^{N_{\mathrm{des}}}
+\Big[g_\eta(z^{(n)};s,a^c)
+\nonumber\\
+&\hspace{18mm}
+-Q_{\min}^{\mathrm{hard}}(s,a^c,z^{(n)})\Big]^2
+\end{align}
+를 최소화한다. Actor 및 spin update에서는 ANOVA 계수를 detach한다. 독립 Bernoulli 분포 아래의 해석적 기대값은
+\begin{equation}
+\widetilde g_\eta(S)=\beta_0+
+\sum_i\beta_iS_i+
+\sum_{(i,j)\in\mathcal E}\beta_{ij}S_iS_j.
+\label{eq:supp-anova-expectation}
+\end{equation}
+
+ANOVA network는 critic을 대체하지 않는다. 설계질의에서는 critic target을 detach하여 $\eta$만 갱신하고, 이후 policy update에서는 $\eta$를 고정한다. 따라서 surrogate의 회귀오차가 actor 쪽으로 역전파되어 surrogate 자체를 유리하게 바꾸는 경로가 없다. 남은 오차는 다음 절의 독립 residual 표본으로 보정한다.
+
+\section{Importance-Weighted ACV Score Gradient}
+\label{sec:acv}
+
+\subsection{Mixture proposal and value identity}
+
+균등분포 $u(z)=2^{-b}$를 사용하여
+\begin{equation}
+q_\epsilon(z\mid S)=(1-\epsilon)\mu_S(z)+\epsilon2^{-b}
+\label{eq:supp-proposal}
+\end{equation}
+및 $w(z,S)=\mu_S(z)/q_\epsilon(z\mid S)$를 정의한다. $\epsilon>0$이면 proposal은 전체 지지집합을 갖는다.
+
+$F(z)=Q_{\min}^{\mathrm{hard}}(s,a^c,z)$ 및
+$\delta(z)=F(z)-g_\eta(z)$라 하자. 독립적인
+$Z^{(k)}\sim q_\epsilon(\cdot\mid S)$에 대해
+\begin{equation}
+\widehat F_{\mathrm{ACV}}(S)=
+\widetilde g_\eta(S)+\frac1M\sum_{k=1}^{M}w(Z^{(k)},S)\delta(Z^{(k)})
+\end{equation}
+로 두면
+\begin{align}
+\E_{q_\epsilon}[\widehat F_{\mathrm{ACV}}]
+&=\widetilde g_\eta(S)+\E_{\mu_S}[F(Z)-g_\eta(Z)]\\
+&=\E_{\mu_S}[F(Z)]=\widetilde F(S).
+\end{align}
+이는 $g_\eta$가 residual 표본과 독립적으로 고정되어 있다는 조건부 결과이다. 구현에서는 설계질의와 residual mixture 표본을 별도로 생성한다.
+
+\subsection{Score-function gradient}
+
+Score identity와 importance sampling을 적용하면
+\begin{align}
+\nabla_S\widetilde F(S)
+&=\nabla_S\widetilde g_\eta(S)
+\nonumber\\
+&\quad+\E_{q_\epsilon}\!\left[
+w(Z,S)\delta(Z)\nabla_S\log\mu_S(Z)\right].
+\label{eq:supp-score-identity}
+\end{align}
+따라서
+\begin{align}
+\widehat G_S
+&=\nabla_S\widetilde g_\eta(S)
+\nonumber\\
+&\quad+\frac1M\sum_{k=1}^{M}w_k\delta_k
+\nabla_S\log\mu_S(Z^{(k)})
+\label{eq:supp-score-estimator}
+\end{align}
+는 불편 gradient estimator이다.
+
+내부점 $|S_i|<1$에서 Bernoulli score의 각 성분은
+\begin{equation}
+\frac{\partial}{\partial S_i}\log\mu_S(z)
+=\frac{z_i}{1+z_iS_i}
+=\frac{z_i-S_i}{1-S_i^2}
+\label{eq:supp-bernoulli-score}
+\end{equation}
+이다. 이 식은 $S_i$가 꼭짓점에 가까울수록 score의 크기가 커질 수 있음을 보여준다. 균등성분을 포함한 proposal은 모든 행동에 양의 표본확률을 부여하지만, 유한 표본에서의 낮은 분산을 자동으로 보장하지는 않는다.
+
+실제 코드는
+\begin{equation}
+\widehat{\mathcal J}_d(S)=
+\widetilde g_\eta(S)+\frac1M\sum_{k=1}^{M}
+\sg(w_k\delta_k)\log\mu_S(Z^{(k)})
+\label{eq:supp-score-surrogate}
+\end{equation}
+를 자동미분한다. $w_k$, $\delta_k$ 및 ANOVA 계수는 detach된다. 따라서 식~\eqref{eq:supp-score-surrogate}의 수치값은 value estimator가 아니지만 그 gradient는 식~\eqref{eq:supp-score-estimator}와 같다. $S=\tanh(\ell)$이므로 학습 중 $|S_i|<1$이다. 구현은 계수가 0인 항에 $0\log0=0$의 support-masked convention을 사용한다.
+
+불편성 주장은 다음 조건을 필요로 한다. critic과 surrogate는 해당 policy step에서 고정되어야 하고, importance weight는 실제 proposal과 정확히 대응해야 하며, residual 표본은 surrogate를 맞추는 데 사용한 설계질의와 별도로 생성되어야 한다. 동일 표본으로 surrogate를 적합하고 residual을 평가하면 식의 대수적 항등식과 달리 유한표본 추정량에 적합 편향이 생길 수 있다. 또한 critic 자체가 환경의 참 가치함수와 다를 수 있으므로 여기서의 불편성은 고정된 learned critic의 다중선형 확장을 기준으로 한 조건부 성질이다.
+
+\section{Training Objective and Update Order}
+\label{sec:training}
+
+평가 이진 행동을 $z_{\mathrm{det}}=\operatorname{sign}(S)$라 하고
+\begin{equation}
+\mathcal R_{\mathrm{bin}}(S)=\frac1b\sum_{i=1}^{b}(1-S_i^2)^2
+\end{equation}
+로 둔다. 구현된 목적은
+\begin{align}
+\mathcal L_{\mathrm{actor}}
+&=\E_{s\sim\mathcal D}\Bigg[
+\frac{1}{2m}\|c_{\mathrm{ctrl}}\|_2^2
++\lambda_{\mathrm{bin}}\mathcal R_{\mathrm{bin}}(S)
+\nonumber\\
+&\qquad-\frac1\alpha Q_{\min}^{\mathrm{hard}}(s,a^c,z_{\mathrm{det}})
+-\frac1\alpha\widehat{\mathcal J}_d(S)\Bigg].
+\end{align}
+연속 action gradient는 결정론적 $z_{\mathrm{det}}$에서 critic을 직접 미분하고, 이진 policy gradient는 식~\eqref{eq:supp-score-surrogate}를 사용한다. Actor update에서는 spin network를 고정하고, spin update에서는 actor를 고정한다.
+
+각 environment step의 순서는 다음과 같다.
+\begin{enumerate}
+    \item 학습정책에서 행동을 생성해 환경에 실행하고 transition을 replay buffer에 저장한다.
+    \item Replay minibatch로 online twin critics를 update한다.
+    \item Target critics를 Polyak averaging으로 갱신한다.
+    \item Policy-update 주기이면 active pairs와 condition-aware design을 생성한다.
+    \item Design targets로 amortized ANOVA network를 update한다.
+    \item 별도의 $M$개 mixture samples로 actor를 update한다.
+    \item Actor를 고정하고 동일 목적에서 spin network를 update한다.
+\end{enumerate}
+
+각 단계의 gradient 소유권은 재현에서 중요하다. Critic step에서는 actor, spin 및 ANOVA 파라미터에 gradient를 전달하지 않는다. ANOVA step에서는 design target인 $Q_{\min}^{\mathrm{hard}}$를 detach한다. Actor step에서는 spin 파라미터와 ANOVA 계수를 고정하되 $S$에서 actor의 $b_{\mathrm{ctrl}}$까지 이어지는 경로는 유지한다. Spin step에서는 actor 출력을 고정하고 $S$에서 $J_\psi,h_\psi$로 이어지는 경로만 유지한다. Importance weight와 residual은 두 policy step 모두에서 stop-gradient 처리한다. Target critic은 online critic의 갱신 뒤
+\begin{equation}
+\phi_j'\leftarrow(1-\tau)\phi_j'+\tau\phi_j
+\end{equation}
+로 갱신하며, evaluation 중에는 replay, observation statistics 및 value-normalization statistics를 변경하지 않는다.
+
+정책 update당 query point 수는
+\begin{equation}
+N_{\mathrm{query}}=N_{\mathrm{des}}+M
+\end{equation}
+이다. Twin critics의 scalar branch 평가 수는 $2(N_{\mathrm{des}}+M)$이다. Sparse surrogate의 항 수와 해석적 기대값 계산비용은 $O(b+K)$이고, 명시적 $b\times b$ 결합행렬의 비용은 $O(b^2)$이다.
+
+기본설정 $K=b$에서 $p=1+2b$이고, 첫 $2p$-row 설계가 조건수 검사를 통과하면 $N_{\mathrm{des}}=M=2p$이다. Table~\ref{tab:supp-query-crossover}는 이때의 질의점 수를 전체 열거와 비교한다.
+
+\begin{table}[!t]
+\centering
+\caption{Query points under the default budget when the first design is accepted.}
+\label{tab:supp-query-crossover}
+\begin{tabular}{lccc}
+\toprule
+Setting & $b$ & Enumeration $2^b$ & Proposed $N_{\mathrm{des}}+M$ \\
+\midrule
+HM4 & 4 & 16 & 36 \\
+HM6 & 6 & 64 & 52 \\
+HM8 & 8 & 256 & 68 \\
+HM10 & 10 & 1,024 & 84 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+따라서 HM4에서는 전체 열거가 질의점 수 기준으로 더 저렴하다. 첫 설계가 실패하여 $3p$ 또는 $4p$ 행을 사용하면 제안 방법의 비용도 증가한다. 본 방법의 계산상 주장은 모든 작은 $b$에서 열거보다 저렴하다는 것이 아니라, 고정된 저차 basis에서 질의 수가 결합 행동 수 $2^b$에 직접 비례하지 않는다는 것이다.
+
+\section{Architectures and Hyperparameters}
+\label{sec:hyperparameters}
+
+Table~\ref{tab:supp-architecture}은 각 모듈의 입력, hidden representation 및 출력구조를 정리한다. 모든 모듈은 작은 fully connected network를 사용하며, critic과 ANOVA network만 이진 주효과 및 쌍대효과를 명시적으로 출력한다.
+
+\begin{table}[!t]
+\centering
+\caption{Network architecture used by the proposed method.}
+\label{tab:supp-architecture}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{p{28mm}p{118mm}}
+\toprule
+Module & Architecture \\
+\midrule
+Hybrid actor & State $\rightarrow$ Linear(64) $\rightarrow$ SiLU $\rightarrow$ Linear($m+b$). \\
+Spin network & Two 64-unit SiLU layers; separate heads for $b(b-1)/2$ bounded couplings and $b$ bounded fields. \\
+Each critic & $(s,a^c)$ $\rightarrow$ Linear(64) $\rightarrow$ LayerNorm $\rightarrow$ SiLU $\rightarrow$ Linear(64) $\rightarrow$ SiLU; intercept, unary, and full-pair heads. \\
+ANOVA network & $(s,a^c)$ through two 64-unit SiLU layers; intercept and unary heads plus bit embeddings and an edge-conditioned pair head. \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Actor와 spin network는 정책의 서로 다른 경로를 담당하지만 동일한 hidden width를 사용한다. Critic의 full-pair head는 실행 행동의 결합가치를 학습하고, ANOVA network의 pair head는 그 clipped twin value를 근사하는 제어변량 계수를 생성한다.
+
+\begin{table}[!t]
+\centering
+\caption{Core settings shared unless stated otherwise.}
+\label{tab:supp-core-hyper}
+\begin{tabular}{lc}
+\toprule
+Setting & Value \\
+\midrule
+Discount $\gamma$ & 0.99 \\
+Mixture probability $\epsilon$ & 0.10 \\
+Value scale $\alpha$ & 1.0 \\
+$\lambda_{\mathrm{bin}}$ & 0.01 \\
+ANOVA learning rate & $3\times10^{-3}$ \\
+Spin learning rate & $1\times10^{-3}$ \\
+Replay capacity & 10,000 \\
+$K$ & $\min(b,b(b-1)/2)$ \\
+$M$ & $\max(16,2(1+b+K))$ \\
+Design rows & first valid of $2p,3p,4p$ \\
+Condition threshold & 100 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:supp-core-hyper}의 $K$, $M$ 및 design rows는 estimator의 질의예산을 결정한다. 기본설정 $K=b$에서는 query-point 수를 차원에 대해 선형적으로 증가시키되, rank 및 condition-number 검사를 통과하지 못한 설계에는 추가 행을 허용한다. 이 선형 관계는 estimator query budget에만 해당하며, full-pair critic과 명시적 logit-interaction matrix의 구조적 비용은 $O(b^2)$이다.
+
+\begin{table}[!t]
+\centering
+\caption{Environment-specific training settings.}
+\label{tab:supp-env-hyper}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lcc}
+\toprule
+Setting & HardMove & Cogen-BC \\
+\midrule
+Actor learning rate & $3\times10^{-4}$ & $1.5\times10^{-4}$ \\
+Critic learning rate & $6\times10^{-4}$ & $6\times10^{-4}$ \\
+Batch size & 16 & 32 \\
+Warm-up steps & 500 & 1,000 \\
+Actor delay & 1 & 2 \\
+Polyak coefficient & 0.01 & 0.02 \\
+Gradient clipping & 2.0 & 0.5 \\
+Interactions & 1,000,000 & 500,000 \\
+Training seeds & 5 & 5 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Cogen-BC는 training stream으로만 갱신되는 observation standardization과 shared-twin PopArt-style Q normalization을 사용한다. 관측 평균과 분산은 replay에 들어오는 training observations로만 갱신하고, validation 및 sealed test에서는 고정한다. PopArt 통계는 두 critic이 공유하며 target scale이 변할 때 마지막 value head를 역변환하여 비정규화된 출력이 즉시 바뀌지 않도록 한다. Observation clipping, target clipping 및 reward rescaling은 사용하지 않았고 physical reward도 변경하지 않았다. 이 정규화는 Cogen-BC의 큰 관측 및 return scale을 처리하기 위한 환경별 설정이며 HardMove에는 적용하지 않았다.
+
+\section{Baseline Representation and Configuration}
+\label{sec:baselines}
+
+HardMove의 공식 행동은 $d$개의 이진 요인으로 생성되는 $2^d$개의 parameterized identities로 표현된다. 범주형 baseline에는 bit vector $z\in\{-1,+1\}^d$를 공식 binary encoding 순서의 정수 $k$로 변환하고, baseline이 선택한 $k$를 같은 순서로 다시 bit vector로 복원하였다. 이 변환은 가능한 조합을 삭제하거나 새 행동을 추가하지 않는 전단사이다. Parameterized-action 방법의 연속 parameter vector는 길이 $2^d$이며 선택된 identity의 성분만 환경에 전달된다. 제안 방법과 Independent variant는 동일한 bit 좌표를 직접 사용한다.
+
+HyAR-TD3, PDQN-TD3, PA-TD3, HHQN-TD3 및 Hybrid PPO는 공개 HardMove 구현의 전용 실행 script를 사용하였다. 환경 차원, seed, 총 1M interactions 및 2,500-step evaluation schedule을 공통 실험조건으로 맞추었으며 주요 설정은 Table~\ref{tab:supp-baseline-config}과 같다.
+
+\begin{table}[!t]
+\centering
+\caption{Principal settings for the HardMove baselines. A dash indicates that the item is not used by that algorithm.}
+\label{tab:supp-baseline-config}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccc}
+\toprule
+Method & Batch & Discount & Start & $\tau$ & Policy delay & Principal exploration \\
+\midrule
+HyAR-TD3 & 128 & 0.99 & 128 & 0.005 & 2 & Gaussian $1.0\!\rightarrow\!0.1$ \\
+PDQN-TD3 & 128 & 0.95 & 128 & actor 0.01 / param. 0.001 & -- & $\epsilon:1.0\!\rightarrow\!0.01$; OU noise \\
+PA-TD3 & 128 & 0.99 & 128 & 0.005 & 2 & Gaussian $1.0\!\rightarrow\!0.1$ \\
+HHQN-TD3 & 128 & 0.99 & 128 & 0.005 & 2 & Gaussian $1.0\!\rightarrow\!0.1$ \\
+Hybrid PPO & 32 & 0.99 & -- & -- & -- & stochastic policy \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+TD3 계열의 target-noise clipping은 0.5였고, HyAR의 policy noise는 0.1, PA-TD3와 HHQN-TD3는 0.2였다. PDQN의 actor 및 parameter-actor learning rates는 각각 $10^{-3}$과 $10^{-4}$, replay capacity는 100,000이었다. Hybrid PPO는 50 environment steps의 epoch를 사용하였다. 각 방법의 구조와 optimizer 설정은 해당 공개 구현을 따랐다.
+
+기준선은 서로 다른 비교 질문에 대응한다. 범주형 parameterized-action 계열은 조합 identity를 명시적으로 구성할 때의 성능 변화를, HyAR는 학습된 latent representation과 decoder를 사용하는 경로를, Independent는 동일한 native bit 좌표에서 결합 가치표현을 제거한 경우를 나타낸다. HM10 component ablation의 unary critic/surrogate는 actor를 그대로 둔 채 pairwise value terms만 제거하며, plain IS 변형은 동일한 mixture proposal과 importance weighting을 유지한 채 ANOVA control-variate correction을 제거한다. 따라서 native action representation의 효과와 structured estimator의 효과를 구분하여 해석할 수 있다.
+
+\section{Experimental Protocols and Additional Results}
+\label{sec:protocols}
+
+\subsection{HardMove}
+
+HardMove-4, 6, 8, 10은 각각 5개 training seeds와 seed당 100만 interactions를 사용한다. 평가는 2,500 interactions마다 100 episodes로 수행하며 결정론적 sign action을 사용한다. 본 실험과 component ablation은 서로 다른 독립 실행이므로 두 실험의 Full 값을 대응표본으로 결합하지 않는다.
+
+\begin{table}[!t]
+\centering
+\caption{Complete HardMove final-success comparison. Values are mean $\pm$ sample standard deviation over five training seeds.}
+\label{tab:supp-hardmove}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+Method & HM4 (16) & HM6 (64) & HM8 (256) & HM10 (1,024) \\
+\midrule
+Ours & $0.556\pm0.046$ & $0.534\pm0.066$ & $0.626\pm0.034$ & $\mathbf{0.630\pm0.044}$ \\
+HyAR-TD3 & $0.752\pm0.203$ & $\mathbf{0.818\pm0.232}$ & $\mathbf{0.860\pm0.112}$ & $0.582\pm0.259$ \\
+PDQN-TD3 & $0.806\pm0.146$ & $0.690\pm0.277$ & $0.044\pm0.011$ & $0.056\pm0.029$ \\
+PA-TD3 & $\mathbf{0.844\pm0.045}$ & $0.046\pm0.026$ & $0.050\pm0.023$ & $0.064\pm0.047$ \\
+HHQN-TD3 & $0.336\pm0.288$ & $0.450\pm0.282$ & $0.042\pm0.019$ & $0.040\pm0.010$ \\
+Hybrid PPO & $0.100\pm0.090$ & $0.050\pm0.014$ & $0.038\pm0.008$ & $0.040\pm0.010$ \\
+Independent & $0.628\pm0.172$ & $0.308\pm0.324$ & $0.250\pm0.275$ & $0.198\pm0.337$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Table~\ref{tab:supp-hardmove}은 본문 그림에서 생략한 Hybrid PPO와 Independent를 포함한다. HM4에서는 PA-TD3가, HM6--HM8에서는 HyAR-TD3가 더 높은 평균을 보였으므로 크기별 절대 순위는 일정하지 않다. 반면 제안 방법은 $b=4$에서 $b=10$으로 증가할 때 성공률이 급락하지 않았고 HM10에서도 비슷한 수준을 유지하였다. HM10--HM4 평균차이는 Ours $+0.074$, HyAR $-0.170$, PDQN $-0.750$, PA-TD3 $-0.780$, HHQN $-0.296$, Hybrid PPO $-0.060$, Independent $-0.430$이다. 이는 시작점의 절대 성능과 분리된 단순 retention 요약이며 통계적 유의성을 뜻하지 않는다.
+
+Ours의 평균 학습시간은 HM4, HM6, HM8 및 HM10에서 각각 15,651, 16,681, 17,267 및 21,807초였고, HyAR-TD3는 62,188, 43,160, 38,694 및 33,612초였다. 이 시간에는 각 구현의 학습절차가 포함되므로 순수 estimator kernel benchmark가 아니다. 특히 Hybrid PPO는 훨씬 짧게 실행되었지만 성공률도 낮았으므로 runtime만으로 방법의 효율을 순위화하지 않는다.
+
+\subsection{Cogen-BC}
+
+Cogen-BC는 SustainGym Cogen의 transition과 reward를 유지하면서 원 환경의 12-way bay actuator를 모든 방법에 대해 12로 고정한 action-restricted 파생환경이다. Agent는 6개 binary 및 8개 continuous actions를 제어한다. 학습은 500,000 interactions와 5개 seeds를 사용한다. 설정 및 checkpoint 선택에는 validation days를 사용하고, 최종 평가는 seed당 50개의 held-out test days에서 수행한다.
+
+Training, validation 및 test 날짜는 서로 겹치지 않도록 고정하였다. 본문의 결과는 unrestricted SustainGym Cogen이 아니라 모든 방법에 동일하게 적용한 action restriction 아래의 비교이다.
+
+\subsection{GymInvMgmt}
+
+GymInvMgmt는 동일한 10단계 물리 네트워크에서 control mask를 변경하여 C6, C8 및 C10을 구성한다. 각 조건은 5개 seeds와 seed당 500,000 interactions를 사용한다. 이 조작은 단순히 독립 dummy bits를 추가하는 것이 아니라 제어 가능한 행동집합을 변경한다.
+
+각 조건은 동일한 10단계 물리 네트워크를 공유하지만 mask가 달라지면 정책이 실제로 제어하는 설비집합도 달라진다. 따라서 C6--C10은 dummy bit를 추가한 순수 차원 통제가 아니다. 일부 실행에서는 학습된 정책이 사용 가능한 binary controls의 부분집합에 집중하였다. 이에 따라 이 결과는 effective action-space dimension의 통제 측정보다 다른 전이 및 보상구조에서의 적용성 증거로 해석한다. 측정된 action latency는 전체 policy forward와 행동변환을 포함하되 environment step은 제외하였다.
+
+\section{Ablations and Statistical Reporting}
+\label{sec:ablations}
+
+본문의 HM10 ablation은 main comparison과 별도로 수행된 독립 실험군이다. 따라서 main comparison의 Ours $0.630\pm0.044$와 ablation의 Full $0.642\pm0.048$을 같은 seed의 대응관측처럼 빼거나 결합하지 않는다. 각 변형은 다음 질문에 대응한다. Marginal-logit policy는 $J$에 의한 logit adjustment, unary critic/surrogate는 actor를 유지한 상태의 pairwise value terms, random MC design은 동일 row budget에서의 질의구성, plain IS는 ANOVA control-variate correction, Independent는 결합 binary modeling 전체의 효과를 평가한다.
+
+Full과 marginal-logit policy, 그리고 Full과 random MC design의 평균차이는 각각 0.010과 0.008로 작다. 반면 unary critic/surrogate와 plain IS는 평균이 각각 0.102와 0.212 낮았지만 표준편차가 컸다. Independent는 평균이 0.444 낮았고 변동성도 컸다. 따라서 이 표는 $J$ 단독의 큰 효과보다 pairwise value representation과 residual-corrected update를 함께 유지한 전체 구성에 대한 근거를 제공한다. 각 요소의 독립적인 효과는 이 실험만으로 확정하지 않는다.
+
+모든 표준편차는 독립 training seed를 단위로 계산한다. $n=5$ 조건의 95\% confidence interval은
+\begin{equation}
+\bar x\pm t_{0.975,4}\frac{s}{\sqrt5},
+\qquad t_{0.975,4}=2.776445
+\end{equation}
+로 계산한다. 여러 환경과 지표를 비교하므로 평균 순위만으로 통계적 유의성을 주장하지 않는다.
+
+\section{Estimator Validation Protocol}
+\label{sec:estimator-validation}
+
+작은 $b$에서는 모든 $2^b$개 행동을 열거하여
+\begin{align}
+\widetilde F_{\mathrm{exact}}(S)&=\sum_z\mu_S(z)F(z),\\
+G_{\mathrm{exact}}(S)&=\nabla_S\widetilde F_{\mathrm{exact}}(S)
+\end{align}
+를 계산한다. 동일한 $(s,a^c,S)$에서 반복 sampling하여
+\begin{align}
+\mathrm{Bias}_Q&=\E[\widehat F_{\mathrm{ACV}}]-\widetilde F_{\mathrm{exact}},\\
+\mathrm{RMSE}_Q&=\sqrt{\E[(\widehat F_{\mathrm{ACV}}-\widetilde F_{\mathrm{exact}})^2]},\\
+\mathrm{RMSE}_G&=\sqrt{\E[\|\widehat G_S-G_{\mathrm{exact}}\|_2^2]},\\
+\mathrm{Var}_G&=\E[\|\widehat G_S-\E[\widehat G_S]\|_2^2]
+\end{align}
+를 보고한다. 비교대상은 plain sampling과 full ACV이며 동일한 residual query budget을 사용하였다. $b=16$의 별도 exhaustive smoke test에서는 $2^{16}=65{,}536$개 행동을 모두 열거하였다. 더 큰 차원의 synthetic full-reward 검증에서는 생성함수로부터 계산 가능한 oracle value와 gradient를 기준으로 사용하였다.
+
+\begin{table}[!t]
+\centering
+\caption{Synthetic estimator validation. RMSE is averaged over the completed validation records.}
+\label{tab:supp-estimator-validation}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{cccc}
+\toprule
+$b$ & Plain value RMSE & ACV value RMSE & ACV gradient RMSE \\
+\midrule
+16 & 0.4686 & 0.1313 & 0.0449 \\
+32 & 0.8379 & 0.3176 & 0.0660 \\
+64 & 1.0300 & 0.3131 & 0.0626 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+$b=16$에서 사용한 ACV 구성은 동일 budget의 plain estimator보다 value RMSE를 약 72\% 낮췄다. 이 검증은 제한된 질의 구현이 목표 다중선형 값과 gradient에 연결되는지를 확인하는 보조 분석이다. 본문의 scaling 결과는 이 표가 아니라 실제 환경에서의 차원별 policy 성능과 계산비용으로 평가한다.
+
+\section{Reproducibility and Interpretation Checklist}
+\label{sec:boundaries}
+
+\begin{itemize}
+    \item 개별 이차 critic의 기대값은 해석적으로 계산 가능하며, 본 구현의 ACV는 그 점별 최솟값을 직접 대상으로 한다.
+    \item Gradient 불편성은 고정된 critic과 surrogate, 정확한 weights 및 독립 residual samples를 조건으로 한다.
+    \item 학습정책은 Bernoulli policy이고 평가정책은 sign policy이므로 내부점에서는 서로 다르다.
+    \item Cogen-BC는 action-restricted 파생환경이며 environment-specific normalization을 사용한다.
+    \item GymInvMgmt mask 조건은 이진 차원만 독립적으로 변화시키는 통제실험이 아니다.
+    \item Replay에는 실제 $\{-1,+1\}^b$ 행동을 저장하고 critic에 relaxed spin을 입력하지 않는다.
+    \item Pair selection, ANOVA coefficients, importance weights 및 critic residual의 detach 여부를 보존한다.
+    \item Design queries와 residual samples를 별도로 생성하고 rank 및 condition number를 기록한다.
+    \item Evaluation 중 observation 및 PopArt statistics를 갱신하지 않는다.
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,3 @@
+\begin{figure}[t]\centering\begin{tikzpicture}\begin{axis}[width=\linewidth,height=5cm,ybar,ylabel={runtime ($10^3$ s)},symbolic x coords={Ours,HyAR,P-TD3,HHQN,HPPO},xtick=data,xticklabel style={font=\scriptsize,rotate=20,anchor=east}]
+\addplot+[fill=blue!45] coordinates {(Ours,9.673)(HyAR,26.618)(P-TD3,18.597)(HHQN,25.008)(HPPO,4.162)};
+\end{axis}\end{tikzpicture}\caption{Cogen-BC mean training runtime. Runtime is not a controlled hardware-speed comparison for every baseline.}\label{fig:cogenrun}\end{figure}
